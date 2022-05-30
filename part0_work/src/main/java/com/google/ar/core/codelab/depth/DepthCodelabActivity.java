@@ -54,6 +54,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
+import android.widget.Button;
 
 /**
  * This is a simple example that shows how to create an augmented reality (AR) application using the
@@ -87,6 +88,9 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
   // Anchors created from taps used for object placing with a given color.
   private static final float[] OBJECT_COLOR = new float[] {139.0f, 195.0f, 74.0f, 255.0f};
   private final ArrayList<Anchor> anchors = new ArrayList<>();
+  private final DepthTextureHandler depthTexture = new DepthTextureHandler();
+
+  private boolean showDepthMap = false;
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
@@ -108,7 +112,20 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
     surfaceView.setWillNotDraw(false);
 
     installRequested = false;
+    final Button toggleDepthButton = (Button) findViewById(R.id.toggle_depth_button);
+    toggleDepthButton.setOnClickListener(
+            view -> {
+              if (isDepthSupported) {
+                showDepthMap = !showDepthMap;
+                toggleDepthButton.setText(showDepthMap ? R.string.hide_depth : R.string.show_depth);
+              } else {
+                showDepthMap = false;
+                toggleDepthButton.setText(R.string.depth_not_available);
+              }
+            });
   }
+
+
 
   @Override
   protected void onResume() {
@@ -222,9 +239,12 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
     try {
       // Create the texture and pass it to ARCore session to be filled during update().
       backgroundRenderer.createOnGlThread(/*context=*/ this);
-
+      // Add to onSurfaceCreated() after backgroundRenderer.createonGlThread(/*context=*/ this);
+      backgroundRenderer.createDepthShaders(/*context=*/ this, depthTexture.getDepthTexture());
+      depthTexture.createOnGlThread();
       virtualObject.createOnGlThread(/*context=*/ this, "models/andy.obj", "models/andy.png");
       virtualObject.setMaterialProperties(0.0f, 2.0f, 0.5f, 6.0f);
+      depthTexture.createOnGlThread();
     } catch (IOException e) {
       Log.e(TAG, "Failed to read an asset file", e);
     }
@@ -256,13 +276,18 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
       // camera framerate.
       Frame frame = session.update();
       Camera camera = frame.getCamera();
-
+      if (isDepthSupported) {
+        depthTexture.update(frame);
+      }
       // Handle one tap per frame.
       handleTap(frame, camera);
 
       // If frame is ready, render camera preview image to the GL surface.
       backgroundRenderer.draw(frame);
-
+      // Add this snippet just under backgroundRenderer.draw(frame);
+      if (showDepthMap) {
+        backgroundRenderer.drawDepth(frame);
+      }
       // Keep the screen unlocked while tracking, but allow it to lock when tracking stops.
       trackingStateHelper.updateKeepScreenOnFlag(camera.getTrackingState());
 
