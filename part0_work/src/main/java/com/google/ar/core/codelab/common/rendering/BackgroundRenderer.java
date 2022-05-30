@@ -253,14 +253,23 @@ public void drawDepth(@NonNull Frame frame) {
   quadTexCoords.position(0);
 
   // No need to test or write depth, the screen quad has arbitrary depth, and is expected
-  // to be drawn first.
-  GLES20.glDisable(GLES20.GL_DEPTH_TEST);
-  GLES20.glDepthMask(false);
+  GLES20.glDepthMask(true);
+  GLES20.glEnable(GLES20.GL_DEPTH_TEST);
+
+  // Enables alpha blending.
+  GLES20.glEnable(GLES20.GL_BLEND);
+  GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA);
 
   GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
   GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, depthTextureId);
   GLES20.glUseProgram(depthProgram);
   GLES20.glUniform1i(depthTextureParam, 0);
+
+  depthRangeToRenderMm += 50.0f;
+  if (depthRangeToRenderMm > MAX_DEPTH_RANGE_TO_RENDER_MM) {
+    depthRangeToRenderMm = 0.0f;
+  }
+  GLES20.glUniform1f(depthRangeToRenderMmParam, depthRangeToRenderMm);
 
   // Set the vertex positions and texture coordinates.
   GLES20.glVertexAttribPointer(
@@ -279,18 +288,6 @@ public void drawDepth(@NonNull Frame frame) {
   GLES20.glDepthMask(true);
   GLES20.glEnable(GLES20.GL_DEPTH_TEST);
 
-  // Enables alpha blending.
-  GLES20.glEnable(GLES20.GL_BLEND);
-  GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA);
-
-// Updates range each time draw() is called.
-  depthRangeToRenderMm += 50.0f;
-  if (depthRangeToRenderMm > MAX_DEPTH_RANGE_TO_RENDER_MM) {
-    depthRangeToRenderMm = 0.0f;
-  }
-
-// Passes latest value to the shader.
-  GLES20.glUniform1f(depthRangeToRenderMmParam, depthRangeToRenderMm);
 
   ShaderUtil.checkGLError(TAG, "BackgroundRendererDraw");
 }

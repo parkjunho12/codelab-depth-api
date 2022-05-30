@@ -22,11 +22,13 @@ import android.os.Bundle;
 import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
 import android.view.MotionEvent;
+import android.widget.Button;
 import android.widget.Toast;
 import com.google.ar.core.Anchor;
 import com.google.ar.core.ArCoreApk;
 import com.google.ar.core.Camera;
 import com.google.ar.core.Config;
+import com.google.ar.core.Coordinates2d;
 import com.google.ar.core.Frame;
 import com.google.ar.core.HitResult;
 import com.google.ar.core.Plane;
@@ -44,6 +46,7 @@ import com.google.ar.core.codelab.common.helpers.TapHelper;
 import com.google.ar.core.codelab.common.helpers.TrackingStateHelper;
 import com.google.ar.core.codelab.common.rendering.BackgroundRenderer;
 import com.google.ar.core.codelab.common.rendering.ObjectRenderer;
+import com.google.ar.core.codelab.common.rendering.OcclusionObjectRenderer;
 import com.google.ar.core.exceptions.CameraNotAvailableException;
 import com.google.ar.core.exceptions.UnavailableApkTooOldException;
 import com.google.ar.core.exceptions.UnavailableArcoreNotInstalledException;
@@ -54,7 +57,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
-import android.widget.Button;
 
 /**
  * This is a simple example that shows how to create an augmented reality (AR) application using the
@@ -75,8 +77,10 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
   private final TrackingStateHelper trackingStateHelper = new TrackingStateHelper(this);
   private TapHelper tapHelper;
 
+  private final DepthTextureHandler depthTexture = new DepthTextureHandler();
   private final BackgroundRenderer backgroundRenderer = new BackgroundRenderer();
   private final ObjectRenderer virtualObject = new ObjectRenderer();
+  private final OcclusionObjectRenderer occludedVirtualObject = new OcclusionObjectRenderer();
 
   // Temporary matrix allocated here to reduce number of allocations for each frame.
   private final float[] anchorMatrix = new float[16];
@@ -88,9 +92,9 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
   // Anchors created from taps used for object placing with a given color.
   private static final float[] OBJECT_COLOR = new float[] {139.0f, 195.0f, 74.0f, 255.0f};
   private final ArrayList<Anchor> anchors = new ArrayList<>();
-  private final DepthTextureHandler depthTexture = new DepthTextureHandler();
 
   private boolean showDepthMap = false;
+  private boolean calculateUVTransform = true;
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
@@ -112,20 +116,19 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
     surfaceView.setWillNotDraw(false);
 
     installRequested = false;
+
     final Button toggleDepthButton = (Button) findViewById(R.id.toggle_depth_button);
     toggleDepthButton.setOnClickListener(
-            view -> {
-              if (isDepthSupported) {
-                showDepthMap = !showDepthMap;
-                toggleDepthButton.setText(showDepthMap ? R.string.hide_depth : R.string.show_depth);
-              } else {
-                showDepthMap = false;
-                toggleDepthButton.setText(R.string.depth_not_available);
-              }
-            });
+        view -> {
+          if (isDepthSupported) {
+            showDepthMap = !showDepthMap;
+            toggleDepthButton.setText(showDepthMap ? R.string.hide_depth : R.string.show_depth);
+          } else {
+            showDepthMap = false;
+            toggleDepthButton.setText(R.string.depth_not_available);
+          }
+        });
   }
-
-
 
   @Override
   protected void onResume() {
@@ -160,6 +163,7 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
           config.setDepthMode(Config.DepthMode.DISABLED);
         }
         session.configure(config);
+
 
       } catch (UnavailableArcoreNotInstalledException
           | UnavailableUserDeclinedInstallationException e) {
@@ -237,15 +241,24 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
 
     // Prepare the rendering objects. This involves reading shaders, so may throw an IOException.
     try {
+      // The depth texture is used for object occlusion and rendering.
       depthTexture.createOnGlThread();
+
       // Create the texture and pass it to ARCore session to be filled during update().
       backgroundRenderer.createOnGlThread(/*context=*/ this);
-      // Add to onSurfaceCreated() after backgroundRenderer.createonGlThread(/*context=*/ this);
       backgroundRenderer.createDepthShaders(/*context=*/ this, depthTexture.getDepthTexture());
 
       virtualObject.createOnGlThread(/*context=*/ this, "models/andy.obj", "models/andy.png");
       virtualObject.setMaterialProperties(0.0f, 2.0f, 0.5f, 6.0f);
-      depthTexture.createOnGlThread();
+
+      if (isDepthSupported) {
+        occludedVirtualObject.createOnGlThread(/*context=*/ this, "models/andy.obj", "models/andy.png");
+        occludedVirtualObject.setDepthTexture(
+            depthTexture.getDepthTexture(),
+            depthTexture.getDepthWidth(),
+            depthTexture.getDepthHeight());
+        occludedVirtualObject.setMaterialProperties(0.0f, 2.0f, 0.5f, 6.0f);
+      }
     } catch (IOException e) {
       Log.e(TAG, "Failed to read an asset file", e);
     }
@@ -277,18 +290,27 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
       // camera framerate.
       Frame frame = session.update();
       Camera camera = frame.getCamera();
+
+      if (frame.hasDisplayGeometryChanged() || calculateUVTransform) {
+        calculateUVTransform = false;
+        float[] transform = getTextureTransformMatrix(frame);
+        occludedVirtualObject.setUvTransformMatrix(transform);
+      }
+
+      // Retrieves the latest depth image for this frame.
       if (isDepthSupported) {
         depthTexture.update(frame);
       }
+
       // Handle one tap per frame.
       handleTap(frame, camera);
 
       // If frame is ready, render camera preview image to the GL surface.
       backgroundRenderer.draw(frame);
-      // Add this snippet just under backgroundRenderer.draw(frame);
       if (showDepthMap) {
         backgroundRenderer.drawDepth(frame);
       }
+
       // Keep the screen unlocked while tracking, but allow it to lock when tracking stops.
       trackingStateHelper.updateKeepScreenOnFlag(camera.getTrackingState());
 
@@ -298,7 +320,6 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
             this, TrackingStateHelper.getTrackingFailureReasonString(camera));
         return;
       }
-
 
       // Get projection matrix.
       float[] projmtx = new float[16];
@@ -322,7 +343,7 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
         messageToShow = SEARCHING_PLANE_MESSAGE;
       }
       if (!isDepthSupported) {
-        messageToShow += "\n" + DEPTH_NOT_AVAILABLE_MESSAGE;
+        messageToShow += "\n" +  DEPTH_NOT_AVAILABLE_MESSAGE;
       }
       messageSnackbarHelper.showMessage(this, messageToShow);
 
@@ -337,8 +358,13 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
         anchor.getPose().toMatrix(anchorMatrix, 0);
 
         // Update and draw the model and its shadow.
-        virtualObject.updateModelMatrix(anchorMatrix, scaleFactor);
-        virtualObject.draw(viewmtx, projmtx, colorCorrectionRgba, OBJECT_COLOR);
+        if (isDepthSupported) {
+          occludedVirtualObject.updateModelMatrix(anchorMatrix, scaleFactor);
+          occludedVirtualObject.draw(viewmtx, projmtx, colorCorrectionRgba, OBJECT_COLOR);
+        } else {
+          virtualObject.updateModelMatrix(anchorMatrix, scaleFactor);
+          virtualObject.draw(viewmtx, projmtx, colorCorrectionRgba, OBJECT_COLOR);
+        }
       }
 
     } catch (Throwable t) {
@@ -402,5 +428,40 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
     return (cameraX - planePose.tx()) * normal[0]
         + (cameraY - planePose.ty()) * normal[1]
         + (cameraZ - planePose.tz()) * normal[2];
+  }
+
+  /**
+   * This method returns a transformation matrix that when applied to screen space uvs makes them
+   * match correctly with the quad texture coords used to render the camera feed. It takes into
+   * account device orientation.
+   */
+  private static float[] getTextureTransformMatrix(Frame frame) {
+    float[] frameTransform = new float[6];
+    float[] uvTransform = new float[9];
+    // XY pairs of coordinates in NDC space that constitute the origin and points along the two
+    // principal axes.
+    float[] ndcBasis = {0, 0, 1, 0, 0, 1};
+
+    // Temporarily store the transformed points into outputTransform.
+    frame.transformCoordinates2d(
+        Coordinates2d.OPENGL_NORMALIZED_DEVICE_COORDINATES,
+        ndcBasis,
+        Coordinates2d.TEXTURE_NORMALIZED,
+        frameTransform);
+
+    // Convert the transformed points into an affine transform and transpose it.
+    float ndcOriginX = frameTransform[0];
+    float ndcOriginY = frameTransform[1];
+    uvTransform[0] = frameTransform[2] - ndcOriginX;
+    uvTransform[1] = frameTransform[3] - ndcOriginY;
+    uvTransform[2] = 0;
+    uvTransform[3] = frameTransform[4] - ndcOriginX;
+    uvTransform[4] = frameTransform[5] - ndcOriginY;
+    uvTransform[5] = 0;
+    uvTransform[6] = ndcOriginX;
+    uvTransform[7] = ndcOriginY;
+    uvTransform[8] = 1;
+
+    return uvTransform;
   }
 }
