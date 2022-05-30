@@ -72,6 +72,7 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
   private DisplayRotationHelper displayRotationHelper;
   private final TrackingStateHelper trackingStateHelper = new TrackingStateHelper(this);
   private TapHelper tapHelper;
+  private boolean isDepthSupported;
 
   private final BackgroundRenderer backgroundRenderer = new BackgroundRenderer();
   private final ObjectRenderer virtualObject = new ObjectRenderer();
@@ -81,6 +82,7 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
 
   private static final String SEARCHING_PLANE_MESSAGE = "Please move around slowly...";
   private static final String PLANES_FOUND_MESSAGE = "Tap to place objects.";
+  private static final String DEPTH_NOT_AVAILABLE_MESSAGE = "[Depth not supported on this device]";
 
   // Anchors created from taps used for object placing with a given color.
   private static final float[] OBJECT_COLOR = new float[] {139.0f, 195.0f, 74.0f, 255.0f};
@@ -133,6 +135,14 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
 
         // Creates the ARCore session.
         session = new Session(/* context= */ this);
+        Config config = session.getConfig();
+        isDepthSupported = session.isDepthModeSupported(Config.DepthMode.AUTOMATIC);
+        if (isDepthSupported) {
+          config.setDepthMode(Config.DepthMode.AUTOMATIC);
+        } else {
+          config.setDepthMode(Config.DepthMode.DISABLED);
+        }
+        session.configure(config);
 
       } catch (UnavailableArcoreNotInstalledException
           | UnavailableUserDeclinedInstallationException e) {
@@ -263,6 +273,7 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
         return;
       }
 
+
       // Get projection matrix.
       float[] projmtx = new float[16];
       camera.getProjectionMatrix(projmtx, 0, 0.1f, 100.0f);
@@ -283,6 +294,9 @@ public class DepthCodelabActivity extends AppCompatActivity implements GLSurface
         messageToShow = PLANES_FOUND_MESSAGE;
       } else {
         messageToShow = SEARCHING_PLANE_MESSAGE;
+      }
+      if (!isDepthSupported) {
+        messageToShow += "\n" + DEPTH_NOT_AVAILABLE_MESSAGE;
       }
       messageSnackbarHelper.showMessage(this, messageToShow);
 
